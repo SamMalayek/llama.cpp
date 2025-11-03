@@ -105,22 +105,22 @@ jobs:
 
         steps:
             - uses: actions/checkout@v4
-
             - uses: actions/setup-python@v5
               with: { python-version: '3.11' }
 
-            # Set up vcpkg (no manifest), cache enabled
-            - name: Setup vcpkg
-              id: vcpkg
-              uses: microsoft/vcpkg-action@v1
-              with:
-                  vcpkgDirectory: ${{ runner.temp }}\vcpkg
-                  # triplet here is only for manifest mode; we just need vcpkg itself bootstrapped
-
-            - name: Install curl via vcpkg
-              shell: bash
+            # --- vcpkg plain bootstrap (no actions, no submodules) ---
+            - name: Bootstrap vcpkg
+              shell: pwsh
               run: |
-                  "$VCPKG_ROOT/vcpkg" install curl[openssl]:x64-windows
+                  $env:VCPKG_ROOT = "$env:RUNNER_TEMP\vcpkg"
+                  git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
+                  & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+                  echo "VCPKG_ROOT=$env:VCPKG_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+            - name: Install curl with OpenSSL via vcpkg
+              shell: pwsh
+              run: |
+                  & "$env:VCPKG_ROOT\vcpkg.exe" install curl[openssl]:x64-windows
 
             - name: Restore model cache
               uses: actions/cache@v4
@@ -137,10 +137,10 @@ jobs:
               run: pip install pytest numpy
 
             - name: Configure & Build (Release)
-              shell: bash
+              shell: pwsh
               run: |
-                  cmake -B build -DCMAKE_BUILD_TYPE=Release \
-                    -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+                  cmake -B build -DCMAKE_BUILD_TYPE=Release `
+                    -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
                   cmake --build build --target llama-embedding --config Release -j 2
 
             - name: Pre-download tiny model (retry x3)
@@ -163,6 +163,7 @@ jobs:
               shell: bash
               run: |
                   pytest -q tests/e2e/embedding -k raw_vs_json_consistency
+
 
 
     embedding-cli-tests-macos:
