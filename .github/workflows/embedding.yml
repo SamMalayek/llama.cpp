@@ -102,25 +102,25 @@ jobs:
         env:
             LLAMA_CACHE: tmp
             EMBD_TEST_DEBUG: "1"
-            VCPKG_DEFAULT_TRIPLET: x64-windows
+
         steps:
             - uses: actions/checkout@v4
 
             - uses: actions/setup-python@v5
               with: { python-version: '3.11' }
 
-            # Install vcpkg once and cache it
+            # Set up vcpkg (no manifest), cache enabled
             - name: Setup vcpkg
-              uses: lukka/run-vcpkg@v11
+              id: vcpkg
+              uses: microsoft/vcpkg-action@v1
               with:
-                  vcpkgGitCommitId: 1654d9a2a8a3e4b8a63b0f3a0a0e3c7c1d0c7a2e # any pinned recent commit
-                  vcpkgTriplet: x64-windows
+                  vcpkgDirectory: ${{ runner.temp }}\vcpkg
+                  # triplet here is only for manifest mode; we just need vcpkg itself bootstrapped
 
-            # Install curl via vcpkg (with OpenSSL)
-            - name: vcpkg install curl
+            - name: Install curl via vcpkg
               shell: bash
               run: |
-                  "$VCPKG_INSTALLATION_ROOT/vcpkg" install curl[openssl] --triplet x64-windows
+                  "$VCPKG_ROOT/vcpkg" install curl[openssl]:x64-windows
 
             - name: Restore model cache
               uses: actions/cache@v4
@@ -139,11 +139,10 @@ jobs:
             - name: Configure & Build (Release)
               shell: bash
               run: |
-                  cmake -B build -DCMAKE_BUILD_TYPE=Release ^
-                    -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+                  cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
                   cmake --build build --target llama-embedding --config Release -j 2
 
-            # Pre-download (retry) so tests don't spend time fetching
             - name: Pre-download tiny model (retry x3)
               shell: bash
               run: |
@@ -160,11 +159,11 @@ jobs:
                     echo "Retrying download ($tries/3)..."; sleep 3
                   done
 
-            # Smoke subset, as per RFC
             - name: Run smoke tests
               shell: bash
               run: |
                   pytest -q tests/e2e/embedding -k raw_vs_json_consistency
+
 
     embedding-cli-tests-macos:
         runs-on: macos-latest
