@@ -143,7 +143,6 @@ def parse_vec(out: str, fmt: str) -> np.ndarray:
 # Register custom mark so pytest doesn't warn about it
 pytestmark = pytest.mark.filterwarnings("ignore::pytest.PytestUnknownMarkWarning")
 
-@pytest.mark.slow
 @pytest.mark.parametrize("fmt", ["raw", "json"])
 @pytest.mark.parametrize("text", ["hello world", "hi 🌎", "line1\nline2\nline3"])
 def test_embedding_runs_and_finite(fmt, text, embedding_model):
@@ -177,7 +176,6 @@ def test_empty_input_deterministic(embedding_model):
     assert cosine_similarity(v1, v2) > 0.99999
 
 
-@pytest.mark.slow
 def test_very_long_input_stress(embedding_model):
     """Stress test: large input near context window."""
     text = "lorem " * 2000
