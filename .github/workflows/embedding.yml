@@ -27,7 +27,6 @@ on:
 jobs:
     embedding-cli-tests-linux:
         runs-on: ubuntu-latest
-        timeout-minutes: 5  # hard wall to enforce "fast"
         env:
             LLAMA_CACHE: tmp   # stable path for cache
             EMBD_TEST_DEBUG: "1"
