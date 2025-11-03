@@ -84,8 +84,22 @@ jobs:
                   done
 
             - name: Run embedding tests (30s per-test cap)
+              shell: bash
               run: |
-                  pytest -v tests/e2e/embedding --timeout=30
+                  set -o pipefail
+                  pytest -v tests/e2e/embedding \
+                  --timeout=30 \
+                  --durations=10 \
+                  --junitxml=pytest-report.xml | tee pytest-output.txt
+
+            - name: Upload test artifacts
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: linux-embedding-tests
+                  path: |
+                      pytest-output.txt
+                      pytest-report.xml
 
             - name: Save model cache
               if: always()
