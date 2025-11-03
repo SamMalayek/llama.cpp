@@ -102,38 +102,48 @@ jobs:
         env:
             LLAMA_CACHE: tmp
             EMBD_TEST_DEBUG: "1"
+            VCPKG_DEFAULT_TRIPLET: x64-windows
         steps:
             - uses: actions/checkout@v4
+
             - uses: actions/setup-python@v5
               with: { python-version: '3.11' }
 
-            # Optional: cache vcpkg installs to speed up repeated runs
-            - name: Cache vcpkg artifacts
+            # Install vcpkg once and cache it
+            - name: Setup vcpkg
+              uses: lukka/run-vcpkg@v11
+              with:
+                  vcpkgGitCommitId: 1654d9a2a8a3e4b8a63b0f3a0a0e3c7c1d0c7a2e # any pinned recent commit
+                  vcpkgTriplet: x64-windows
+
+            # Install curl via vcpkg (with OpenSSL)
+            - name: vcpkg install curl
+              shell: bash
+              run: |
+                  "$VCPKG_INSTALLATION_ROOT/vcpkg" install curl[openssl] --triplet x64-windows
+
+            - name: Restore model cache
               uses: actions/cache@v4
               with:
                   path: |
-                      vcpkg/installed
-                      vcpkg/downloads
-                  key: vcpkg-${{ runner.os }}-curl-openssl-x64
-
-            - name: Bootstrap vcpkg & install libcurl SDK
-              shell: bash
-              run: |
-                  set -e
-                  if [ ! -d vcpkg ]; then git clone https://github.com/microsoft/vcpkg; fi
-                  ./vcpkg/bootstrap-vcpkg.bat
-                  ./vcpkg/vcpkg.exe install curl[openssl,sspi]:x64-windows
+                      $HOME/.cache/llama.cpp
+                      tmp
+                  key: hf-${{ runner.os }}-embeddinggemma-300M-q4_0-v1
+                  restore-keys: |
+                      hf-${{ runner.os }}-
+                      hf-
 
             - name: Install Python deps
               run: pip install pytest numpy
 
-            - name: Configure & Build (Release, CURL ON via vcpkg)
+            - name: Configure & Build (Release)
               shell: bash
               run: |
-                  cmake -B build -DCMAKE_BUILD_TYPE=Release \
-                    -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                  cmake -B build -DCMAKE_BUILD_TYPE=Release ^
+                    -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
                   cmake --build build --target llama-embedding --config Release -j 2
 
+            # Pre-download (retry) so tests don't spend time fetching
             - name: Pre-download tiny model (retry x3)
               shell: bash
               run: |
@@ -150,7 +160,8 @@ jobs:
                     echo "Retrying download ($tries/3)..."; sleep 3
                   done
 
-            - name: Tiny smoke (JSON/raw consistency)
+            # Smoke subset, as per RFC
+            - name: Run smoke tests
               shell: bash
               run: |
                   pytest -q tests/e2e/embedding -k raw_vs_json_consistency
