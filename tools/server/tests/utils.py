@@ -9,6 +9,7 @@ import re
 import json
 from json import JSONDecodeError
 import sys
+from pathlib import Path
 import requests
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -123,9 +124,11 @@ class ServerProcess:
         elif "LLAMA_SERVER_BIN_PATH" in os.environ:
             server_path = os.environ["LLAMA_SERVER_BIN_PATH"]
         elif os.name == "nt":
-            server_path = "../../../build/bin/Release/llama-server.exe"
+            repo_root = Path(__file__).resolve().parents[3]
+            server_path = str(repo_root / "build" / "bin" / "Release" / "llama-server.exe")
         else:
-            server_path = "../../../build/bin/llama-server"
+            repo_root = Path(__file__).resolve().parents[3]
+            server_path = str(repo_root / "build" / "bin" / "llama-server")
         server_args = [
             "--host",
             self.server_host,
@@ -315,7 +318,8 @@ class ServerProcess:
                 result.body = response.text
         else:
             result.body = None
-        print("Response from server", json.dumps(result.body, indent=2))
+        if self.debug:
+            print("Response from server", json.dumps(result.body, indent=2))
         return result
 
     def make_stream_request(
@@ -338,7 +342,8 @@ class ServerProcess:
                 break
             elif line.startswith('data: '):
                 data = json.loads(line[6:])
-                print("Partial response from server", json.dumps(data, indent=2))
+                if self.debug:
+                    print("Partial response from server", json.dumps(data, indent=2))
                 yield data
 
     def make_any_request(

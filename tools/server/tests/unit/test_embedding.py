@@ -255,3 +255,82 @@ def test_embedding_openai_library_base64():
     # make sure the decoded data is the same as the original
     for x, y in zip(floats, vec0):
         assert abs(x - y) < EPSILON
+
+
+def _assert_vecs_close(a, b, eps=EPSILON):
+    assert len(a) == len(b)
+    for x, y in zip(a, b):
+        assert abs(x - y) < eps
+
+
+def _assert_mat_close(a, b, eps=EPSILON):
+    assert len(a) == len(b)
+    for va, vb in zip(a, b):
+        _assert_vecs_close(va, vb, eps=eps)
+
+
+def test_embeddings_v2_matches_v1_for_pooled_embeddings():
+    """
+    /v1/embeddings (OAI) returns a 1D embedding vector per input.
+    /v2/embeddings returns embedding as 2D (list of vectors). For pooled modes, it should be a single vector [0].
+    """
+    global server
+    server.pooling = 'last'
+    server.start()
+
+    payload = {
+        "input": [
+            "I believe the meaning of life is",
+            "This is a test",
+        ],
+        "embd_normalize": 2,
+    }
+
+    res_v1 = server.make_request("POST", "/v1/embeddings", data=payload)
+    assert res_v1.status_code == 200
+
+    res_v2 = server.make_request("POST", "/v2/embeddings", data=payload)
+    assert res_v2.status_code == 200
+
+    assert "data" in res_v2.body
+    assert len(res_v2.body["data"]) == len(res_v1.body["data"])
+
+    # usage should match tokenization
+    assert res_v2.body["usage"]["prompt_tokens"] == res_v1.body["usage"]["prompt_tokens"]
+
+    for i in range(len(res_v1.body["data"])):
+        v1_vec = res_v1.body["data"][i]["embedding"]
+        v2_mat = res_v2.body["data"][i]["embedding"]
+        assert isinstance(v2_mat, list)
+        assert len(v2_mat) == 1
+        _assert_vecs_close(v2_mat[0], v1_vec)
+
+
+def test_embeddings_v2_matches_embeddings_endpoint_for_pooling_none():
+    """
+    With pooling == none:
+    - /embeddings returns embedding as 2D: one vector per token
+    - /v2/embeddings now returns the same 2D shape per input
+    """
+    global server
+    server.pooling = 'none'
+    server.start()
+
+    payload = {
+        "input": ["hello hello hello"],
+        "embd_normalize": 2,  # ignored for pooling none, but should not break anything
+    }
+
+    res_v1 = server.make_request("POST", "/embeddings", data=payload)
+    assert res_v1.status_code == 200
+    assert isinstance(res_v1.body, list)
+    assert len(res_v1.body) == 1
+
+    res_v2 = server.make_request("POST", "/v2/embeddings", data=payload)
+    assert res_v2.status_code == 200
+    assert "data" in res_v2.body
+    assert len(res_v2.body["data"]) == 1
+
+    v1_mat = res_v1.body[0]["embedding"]
+    v2_mat = res_v2.body["data"][0]["embedding"]
+    _assert_mat_close(v2_mat, v1_mat)

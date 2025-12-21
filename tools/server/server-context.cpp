@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "llama.h"
+#include "llama-embedding.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -3736,6 +3737,10 @@ void server_routes::init_routes() {
         return handle_embeddings_impl(req, TASK_RESPONSE_TYPE_OAI_EMBD);
     };
 
+    this->post_embeddings_v2 = [this](const server_http_req & req) {
+        return handle_embeddings_v2_impl(req);
+    };
+
     this->post_rerank = [this](const server_http_req & req) {
         auto res = create_response();
         if (!params.embedding || params.pooling_type != LLAMA_POOLING_TYPE_RANK) {
@@ -4073,6 +4078,116 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
     json root = res_type == TASK_RESPONSE_TYPE_OAI_EMBD
         ? format_embeddings_response_oaicompat(body, meta->model_name, responses, use_base64)
         : json(responses);
+    res->ok(root);
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_embeddings_v2_impl(const server_http_req & req) {
+    auto res = create_response();
+    if (!params.embedding) {
+        res->error(format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+
+    const json body = json::parse(req.body);
+
+    // Parse input - v2 API: input is always required and should be an array
+    if (!body.contains("input")) {
+        res->error(format_error_response("\"input\" must be provided as an array", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    json input = body.at("input");
+    if (!input.is_array()) {
+        res->error(format_error_response("\"input\" must be an array", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    if (input.empty()) {
+        res->error(format_error_response("\"input\" array cannot be empty", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    // v2 API returns embeddings as a 2D array per input:
+    // - pooling != NONE: a single pooled vector (shape: [1][n_embd])
+    // - pooling == NONE: one vector per input token (shape: [n_tokens][n_embd])
+    int embd_normalize = json_value(body, "embd_normalize", 2); // default to Euclidean/L2 norm
+
+    // Tokenize input
+    auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, input, true, true);
+    for (const auto & tokens : tokenized_prompts) {
+        if (tokens.empty()) {
+            res->error(format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+    }
+
+    // Count total tokens for usage
+    size_t total_tokens = 0;
+    for (const auto & tokens : tokenized_prompts) {
+        total_tokens += tokens.size();
+    }
+
+    // create and queue the task
+    json responses = json::array();
+    server_response_reader & rd = res->rd;
+    {
+        std::vector<server_task> tasks;
+        for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+            server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
+
+            task.id     = queue_tasks.get_new_id();
+            task.index  = i;
+            task.tokens = std::move(tokenized_prompts[i]);
+
+            // Use TASK_RESPONSE_TYPE_NONE for v2 API (not OAI format)
+            task.params.res_type = TASK_RESPONSE_TYPE_NONE;
+            task.params.embd_normalize = embd_normalize;
+
+            tasks.push_back(std::move(task));
+        }
+        rd.post_tasks(std::move(tasks));
+    }
+
+    // wait for the results
+    auto all_results = rd.wait_for_all(req.should_stop);
+
+    // collect results
+    if (all_results.is_terminated) {
+        return res; // connection is closed
+    } else if (all_results.error) {
+        res->error(all_results.error->to_json());
+        return res;
+    } else {
+        for (auto & result : all_results.results) {
+            GGML_ASSERT(result != nullptr && "missing result from wait_for_all");
+            GGML_ASSERT(dynamic_cast<server_task_result_embd*>(result.get()) != nullptr);
+            auto * embd_result = dynamic_cast<server_task_result_embd*>(result.get());
+
+            if (embd_result->embedding.empty()) {
+                res->error(format_error_response("Failed to compute embedding", ERROR_TYPE_SERVER));
+                return res;
+            }
+
+            json emb_item = json::object();
+            emb_item["index"] = embd_result->index;
+            emb_item["embedding"] = embd_result->embedding;
+            responses.push_back(emb_item);
+        }
+    }
+
+    // Get model name (use server's model name if not provided)
+    std::string model_name = json_value(body, "model", meta->model_name);
+    const int32_t n_embd = meta->model_n_embd_inp;
+
+    // Format v2 API response structure
+    json root = json::object();
+    root["data"] = responses;
+    root["model"] = model_name;
+    root["dim"] = n_embd;
+    root["usage"] = json::object();
+    root["usage"]["prompt_tokens"] = (int32_t) total_tokens;
+
     res->ok(root);
     return res;
 }

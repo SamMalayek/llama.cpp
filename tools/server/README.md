@@ -1303,6 +1303,30 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
   }'
   ```
 
+- `input` as string array
+
+### POST `/v2/embeddings`: embeddings API v2
+
+This endpoint returns embeddings in a **fixed, non-OAI** response format, with usage included.
+
+The returned `embedding` is always **2D**:
+
+- If `--pooling` is not `none` (e.g. `mean`, `cls`, `last`), each input returns a single pooled vector: shape `[1][n_embd]`
+- If `--pooling none`, each input returns one vector per token: shape `[n_tokens][n_embd]`
+
+*Response format*
+
+```js
+{
+  "data": [
+    { "index": 0, "embedding": [ [ /* ... */ ] ] }
+  ],
+  "model": "model-name",
+  "dim": 4096,
+  "usage": { "prompt_tokens": 123 }
+}
+```
+
 ### POST `/v1/messages`: Anthropic-compatible Messages API
 
 Given a list of `messages`, returns the assistant's response. Streaming is supported via Server-Sent Events. While no strong claims of compatibility with the Anthropic API spec are made, in our experience it suffices to support many apps.
